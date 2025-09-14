@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Mesh Chat</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #1e1e1e; color: #d4d4d4; font-size: 14px; }
+        .main-container { display: flex; height: 100vh; visibility: hidden; }
+        .sidebar { width: 250px; background-color: #252526; border-right: 1px solid #333; display: flex; flex-direction: column; padding: 10px; box-sizing: border-box; }
+        .chat-container { flex-grow: 1; display: flex; flex-direction: column; }
+        #chat-window { flex-grow: 1; overflow-y: auto; padding: 20px; }
+        #message-input-form { display: flex; padding: 10px; border-top: 1px solid #333; }
+        input[type="text"] { flex-grow: 1; padding: 10px; border: 1px solid #3c3c3c; background-color: #3c3c3c; color: #d4d4d4; border-radius: 5px; }
+        button { padding: 10px 15px; margin-left: 10px; background-color: #0e639c; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #1579b9; }
+        .message { margin-bottom: 15px; }
+        .message .sender { font-weight: bold; }
+        .message.me .sender { color: #9cdcfe; }
+        .message.peer .sender { color: #4ec9b0; }
+        .message.system .text { color: #ce9178; font-style: italic; }
+        .sidebar h3, .sidebar h4 { margin-top: 0; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .sidebar button { width: 100%; padding: 8px; margin-bottom: 10px; }
+        .peer-list { list-style: none; padding: 0; margin: 0; }
+        .peer-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
+        .peer-list li:hover { background-color: #3c3c3c; }
+        .peer-list li .connect-btn { font-size: 18px; cursor: pointer; padding: 0 5px; }
+        .peer-list li .disconnect-btn { font-size: 12px; cursor: pointer; color: #f44747; background: #4f2323; border: 1px solid #f44747; border-radius: 3px; padding: 2px 5px; }
+        #login-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 100; }
+        #login-box { background-color: #252526; padding: 30px; border-radius: 8px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="login-modal">
+        <div id="login-box">
+            <h2>Welcome to P2P Mesh Chat</h2>
+            <form id="login-form" action="javascript:void(0);">
+                <input type="text" id="name-input" placeholder="Enter your name" required>
+                <button type="submit">Join Chat</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="main-container" id="main-app">
+        <div class="sidebar">
+            <h3>Mesh Chat</h3>
+            <div id="user-info" style="padding-bottom: 10px;"></div>
+            <button id="refresh-peers-btn">Scan for Peers</button>
+            <h4>Available Peers</h4>
+            <ul id="available-peer-list" class="peer-list"></ul>
+            <h4 style="margin-top: 20px;">Connected Peers</h4>
+            <ul id="connected-peer-list" class="peer-list"></ul>
+        </div>
+        <div class="chat-container">
+            <div id="chat-window"></div>
+            <form id="message-input-form" action="javascript:void(0);">
+                <input type="text" id="message-text" placeholder="Type a message to broadcast..." autocomplete="off">
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const chatWindow = document.getElementById('chat-window');
+        const messageForm = document.getElementById('message-input-form');
+        const messageInput = document.getElementById('message-text');
+        const availablePeerList = document.getElementById('available-peer-list');
+        const connectedPeerList = document.getElementById('connected-peer-list');
+        const refreshPeersBtn = document.getElementById('refresh-peers-btn');
+        const userInfoDiv = document.getElementById('user-info');
+        const loginModal = document.getElementById('login-modal');
+        const loginForm = document.getElementById('login-form');
+        const nameInput = document.getElementById('name-input');
+        const mainApp = document.getElementById('main-app');
+
+        const ws = new WebSocket(`ws://localhost:8081`);
+
+        function addMessage(type, sender, text, isPrivate = false) {
+            const el = document.createElement('div'); el.classList.add('message', type);
+            el.innerHTML = `<div class="sender">${(isPrivate ? '[Private] ' : '') + sender}</div><div class="text">${text}</div>`;
+            chatWindow.appendChild(el); chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            switch (data.action) {
+                case 'set_user_info':
+                    userInfoDiv.innerHTML = `<strong>${data.name}</strong><br><small>${data.ip}</small>`;
+                    addMessage('system', 'System', 'Ready to chat! Use the sidebar to find and connect to peers.');
+                    break;
+                case 'new_message':
+                    addMessage('peer', data.sender, data.payload, data.is_private);
+                    break;
+                case 'system': case 'error':
+                    addMessage('system', 'System', data.message);
+                    break;
+                case 'available_peer_list':
+                    availablePeerList.innerHTML = '';
+                    if (data.peers.length === 0) availablePeerList.innerHTML = '<li>No peers found.</li>';
+                    data.peers.forEach(peer => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `<div><strong>${peer.name}</strong><br><small>${peer.ip}</small></div> <span class="connect-btn" title="Connect to ${peer.name}">➕</span>`;
+                        li.querySelector('.connect-btn').onclick = (e) => {
+                            e.stopPropagation();
+                            ws.send(JSON.stringify({ action: 'connect', ip: peer.ip }));
+                            addMessage('system', 'System', `Attempting to connect to ${peer.name}...`);
+                        };
+                        availablePeerList.appendChild(li);
+                    });
+                    break;
+                case 'connected_peer_list':
+                    connectedPeerList.innerHTML = '';
+                     if (data.peers.length === 0) connectedPeerList.innerHTML = '<li>Not connected.</li>';
+                    data.peers.forEach(peer => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `<div><strong>${peer.name}</strong><br><small>${peer.ip}</small></div> <button class="disconnect-btn" title="Disconnect from ${peer.name}">X</button>`;
+                        li.querySelector('.disconnect-btn').onclick = (e) => {
+                             e.stopPropagation();
+                            ws.send(JSON.stringify({ action: 'disconnect', ip: peer.ip }));
+                        };
+                        connectedPeerList.appendChild(li);
+                    });
+                    break;
+            }
+        };
+
+        ws.onopen = () => console.log('WebSocket connection established.');
+        ws.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+            if (!loginModal.style.display || loginModal.style.display !== 'none') {
+                loginModal.querySelector('h2').textContent = 'Connection to Backend Failed';
+                loginModal.querySelector('#login-form').innerHTML = '<p>Could not connect to the Python backend. Is the script running? Please start main.py and then refresh this page.</p>';
+            }
+        };
+
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = nameInput.value;
+            if (name) {
+                ws.send(JSON.stringify({ action: 'register', name: name }));
+                loginModal.style.display = 'none';
+                mainApp.style.visibility = 'visible';
+            }
+        });
+        
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const message = messageInput.value;
+            if (message) {
+                ws.send(JSON.stringify({ action: 'send_message', payload: message }));
+                addMessage('me', 'Me', message);
+                messageInput.value = '';
+            }
+        });
+
+        refreshPeersBtn.addEventListener('click', () => {
+            ws.send(JSON.stringify({ action: 'get_peers' }));
+            addMessage('system', 'System', 'Scanning for available peers...');
+        });
+    </script>
+</body>
+</html>
