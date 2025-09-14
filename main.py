@@ -209,6 +209,7 @@ def udp_listen_task():
 # --- Main UI Loop ---
 async def chat_interface(routing_manager):
     await aioconsole.aprint(format_message("System", f"Welcome, {USER_NAME}! Dijkstra routing is active. Type '/h' for help."))
+    await aioconsole.aprint(format_message("System", "Use '/s' to check available peers and '/connect <number>' to connect to a peer.", color=Fore.YELLOW))
     while True:
         user_input = await aioconsole.ainput(Fore.WHITE + "> ")
         if not user_input: continue
